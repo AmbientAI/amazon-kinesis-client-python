@@ -57,6 +57,7 @@ class MavenJarDownloader:
         self.destdir = destdir
         self.packages_file = packages_file
         self.packages = self.parse_packages_from_pom()
+        self.system_packages = self.parse_system_packages_from_pom()
 
     def warning_string(self, missing_jars=[]):
         s = '''The following jars were not installed because they were not
@@ -76,6 +77,37 @@ Which will download the required jars and rerun the install.
 '''
         return s
 
+    def parse_system_packages_from_pom(self):
+        """Parse system-scoped dependencies that need to be copied to jars directory"""
+        maven_root = ET.parse(self.packages_file).getroot()
+        maven_version = '{http://maven.apache.org/POM/4.0.0}'
+        # dictionary of common package versions encoded in `properties` section
+        properties = {f"${{{child.tag.replace(maven_version, '')}}}": child.text
+                      for child in maven_root.find(f'{maven_version}properties').iter() if 'version' in child.tag}
+
+        system_packages = []
+        for dep in maven_root.iter(f'{maven_version}dependency'):
+            # Only include system-scoped dependencies
+            scope_element = dep.find(maven_version + 'scope')
+            if scope_element is not None and scope_element.text == 'system':
+                system_path_element = dep.find(maven_version + 'systemPath')
+                if system_path_element is not None:
+                    artifact_id = dep.find(maven_version + 'artifactId').text
+                    version_element = dep.find(maven_version + 'version')
+                    version = version_element.text if version_element is not None else ''
+                    
+                    # Resolve properties in systemPath and version
+                    system_path = system_path_element.text
+                    for prop_key, prop_value in properties.items():
+                        system_path = system_path.replace(prop_key, prop_value)
+                        version = version.replace(prop_key, prop_value)
+                    
+                    # Convert ${basedir} to actual project root
+                    system_path = system_path.replace('${basedir}', '.')
+                    
+                    system_packages.append((artifact_id, version, system_path))
+        return system_packages
+
     def parse_packages_from_pom(self):
         maven_root = ET.parse(self.packages_file).getroot()
         maven_version = '{http://maven.apache.org/POM/4.0.0}'
@@ -85,6 +117,11 @@ Which will download the required jars and rerun the install.
 
         packages = []
         for dep in maven_root.iter(f'{maven_version}dependency'):
+            # Skip system-scoped dependencies (they should be provided locally)
+            scope_element = dep.find(maven_version + 'scope')
+            if scope_element is not None and scope_element.text == 'system':
+                continue
+            
             dependency = []
             for attr in ['groupId', 'artifactId', 'version']:
                 val = dep.find(maven_version + attr).text
@@ -107,7 +144,10 @@ Which will download the required jars and rerun the install.
         return '{artifact_id}-{version}.jar'.format(artifact_id=artifact_id, version=version)
 
     def missing_jars(self):
+        # Check remote packages
         file_list = [os.path.join(self.destdir, self.package_destination(p[1], p[2])) for p in self.packages]
+        # Check system packages
+        file_list.extend([os.path.join(self.destdir, self.package_destination(p[0], p[1])) for p in self.system_packages])
         return [f for f in file_list if not os.path.isfile(f)] # The missing files
 
     def package_url(self, group_id, artifact_id, version):
@@ -138,6 +178,11 @@ Which will download the required jars and rerun the install.
             return
 
     def download_files(self):
+        # Ensure destination directory exists
+        if not os.path.exists(self.destdir):
+            os.makedirs(self.destdir)
+            
+        # Download remote packages
         for package in self.packages:
             dest = os.path.join(self.destdir, self.package_destination(package[1], package[2]))
             if os.path.isfile(dest):
@@ -145,6 +190,17 @@ Which will download the required jars and rerun the install.
             else:
                 url = self.package_url(package[0], package[1], package[2])
                 self.download_file(url, dest)
+        
+        # Copy system-scoped packages
+        for artifact_id, version, system_path in self.system_packages:
+            dest = os.path.join(self.destdir, self.package_destination(artifact_id, version))
+            if os.path.isfile(dest):
+                print('Skipping copy of {dest} (already exists)'.format(dest=dest))
+            elif os.path.isfile(system_path):
+                print('Copying system jar from {src} -> {dest}'.format(src=system_path, dest=dest))
+                shutil.copy2(system_path, dest)
+            else:
+                print('Warning: System jar not found at {path}'.format(path=system_path))
 
 
 class DownloadJarsCommand(Command):
