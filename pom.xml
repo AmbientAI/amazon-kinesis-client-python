@@ -13,16 +13,6 @@
     </properties>
     <dependencies>
         <dependency>
-            <groupId>software.amazon.kinesis</groupId>
-            <artifactId>amazon-kinesis-client-multilang</artifactId>
-            <version>${kcl.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>software.amazon.kinesis</groupId>
-            <artifactId>amazon-kinesis-client</artifactId>
-            <version>${kcl.version}</version>
-        </dependency>
-        <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>kinesis</artifactId>
             <version>${awssdk.version}</version>
